@@ -38,6 +38,7 @@ uint8_t _inListedTag;  // Tg number of inlisted tag.
 // Uncomment these lines to enable debug output for PN532(SPI) and/or MIFARE related code
 #define PN532DEBUG
 // #define MIFAREDEBUG
+// #define IRQDEBUG
 
 #define PN532_PACKBUFFSIZ 64
 uint8_t pn532_packetbuffer[PN532_PACKBUFFSIZ];
@@ -201,13 +202,15 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
 	//configure GPIO with the given settings
 	if (gpio_config (&io_conf) != ESP_OK) return false;
 
+	// Reset the PN532
+	resetPN532();
 
 	i2c_config_t conf;
 	//Open the I2C Bus
 	conf.mode = I2C_MODE_MASTER;
 	conf.sda_io_num = SDA_PIN;
 	conf.sda_pullup_en = GPIO_PULLUP_DISABLE;
-	conf.scl_io_num = SDA_PIN;
+	conf.scl_io_num = SCL_PIN;
 	conf.scl_pullup_en = GPIO_PULLUP_DISABLE;
 	conf.master.clk_speed = 100000;
 
@@ -216,8 +219,7 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
 	//Needed due to long wake up procedure on the first command on i2c bus. May be decreased
 	if(i2c_set_timeout(PN532_I2C_PORT,400000)!=ESP_OK) return false;
 
-	// Reset the PN532
-	resetPN532();
+
 
 	return true;
 }
@@ -256,7 +258,7 @@ bool readdata (uint8_t* buff, uint8_t n)
 			free(buffer);
 			return false;
 		};
-//
+
 		i2c_cmd_link_delete(i2ccmd);
 
 		memcpy(buff,buffer+1,n);
@@ -297,7 +299,7 @@ bool isready ()
 {
 	// I2C check if status is ready by IRQ line being pulled low.
 	uint8_t x = gpio_get_level (IRQ_PIN);
-#ifdef PN532DEBUG
+#ifdef IRQDEBUG
 	ESP_LOGI(TAG,"IRQ: %d",x);
 #endif
 	return (x == 0);
@@ -318,7 +320,7 @@ bool waitready (uint16_t timeout)
 	{
 		if (timeout != 0)
 		{
-			timer += 10;
+			timer += 1;
 			if (timer > timeout)
 			{
 #ifdef PN532DEBUG
@@ -327,7 +329,7 @@ bool waitready (uint16_t timeout)
 				return false;
 			}
 		}
-		vTaskDelay (10 / portTICK_PERIOD_MS);
+		vTaskDelay (1 / portTICK_PERIOD_MS);
 	}
 	return true;
 }
@@ -348,20 +350,18 @@ bool waitready (uint16_t timeout)
 bool sendCommandCheckAck (uint8_t *cmd, uint8_t cmdlen, uint16_t timeout)
 {
 
-	for(uint8_t i=0; i<2;i++)
-	{
-		// write the command
-		writecommand (cmd, cmdlen);
+	// write the command
+	writecommand (cmd, cmdlen);
 
-		// Wait for chip to say its ready!
-		if (!waitready (timeout))
-		{
-			ESP_LOGE(TAG,"Timeout");
-			if(i<1) continue;
-			else return false;
-		}
-		else break;
+	// Wait for chip to say its ready!
+	if (!waitready (timeout))
+	{
+#ifdef PN532DEBUG
+		ESP_LOGE(TAG,"Timeout");
+#endif
+		return false;
 	}
+
 		// read acknowledgement
 		if (!readack ())
 		{
