@@ -22,21 +22,18 @@
 #include "esp_err.h"
 #include <stdlib.h>
 
-#define PN532_RESET_CONFIG  ((1ULL<<RESET_PIN))
-#define PN532_IRQ_CONFIG  ((1ULL<<IRQ_PIN))
+
 #define TAG "PN532"
 
-uint8_t pn532ack[] =
-{ 0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00 };
-uint8_t pn532response_firmwarevers[] =
-{ 0x00, 0xFF, 0x06, 0xFA, 0xD5, 0x03 };
-uint8_t _sda,_scl,_reset,_irq;
+uint8_t pn532ack[] = { 0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00 };
+uint8_t pn532response_firmwarevers[] = { 0x00, 0xFF, 0x06, 0xFA, 0xD5, 0x03 };
+uint8_t SDA_PIN,SCL_PIN,RESET_PIN,IRQ_PIN;
+i2c_port_t PN532_I2C_PORT;
 uint8_t _uid[7];       // ISO14443A uid
 uint8_t _uidLen;       // uid len
 uint8_t _key[6];       // Mifare Classic key
 uint8_t _inListedTag;  // Tg number of inlisted tag.
-bool _usingSPI;     // True if using SPI, false if using I2C.
-bool _hardwareSPI;  // True is using hardware SPI, false if using software SPI.
+
 
 // Uncomment these lines to enable debug output for PN532(SPI) and/or MIFARE related code
 #define PN532DEBUG
@@ -77,8 +74,7 @@ static void resetPN532()
  @param  cmdlen    Command length in bytes
  */
 /**************************************************************************/
-void
-writecommand (uint8_t* cmd, uint8_t cmdlen)
+void writecommand (uint8_t* cmd, uint8_t cmdlen)
 {
 
 	// I2C command write.
@@ -146,21 +142,33 @@ writecommand (uint8_t* cmd, uint8_t cmdlen)
 
 	i2c_cmd_link_delete(i2ccmd);
 
-
-
-
-
 	free(command);
 }
 
 
 /**************************************************************************/
 /*!
- @brief  Setups the HW
+ @brief  Setups the HW and the I2C Bus
+
+ @param  sda      						GPIO PIN for the SDA signal
+ @param  scl      						GPIO PIN for the SCL signal
+ @param  reset     						GPIO PIN for the reset signal
+ @param  irq      						GPIO PIN for the IRQ signal
+ @param  i2c_port_number      I2C Port number
+
+ @return true if hw setup OK, false otherwise
  */
 /**************************************************************************/
-bool configurePN532Pin ()
+bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_t i2c_port_number)
 {
+	SCL_PIN=scl;
+	SDA_PIN=sda;
+	RESET_PIN=reset;
+	IRQ_PIN=irq;
+	PN532_I2C_PORT=i2c_port_number;
+
+	uint64_t pintBitMask=((1ULL) << RESET_PIN);
+
 	//initialize the PIN
 	//Lets configure GPIO PIN for IRQ
 	gpio_config_t io_conf;
@@ -169,7 +177,7 @@ bool configurePN532Pin ()
 	//set as output mode
 	io_conf.mode = GPIO_MODE_OUTPUT;
 	//bit mask of the pins that you want to set,e.g.GPIO18/19
-	io_conf.pin_bit_mask = PN532_RESET_CONFIG;
+	io_conf.pin_bit_mask = pintBitMask;
 	//disable pull-down mode
 	io_conf.pull_down_en = 0;
 	//enable pull-up mode
@@ -177,65 +185,44 @@ bool configurePN532Pin ()
 	//configure GPIO with the given settings
 	if (gpio_config (&io_conf) != ESP_OK) return false;
 
+
+	pintBitMask=((1ULL) << IRQ_PIN);
 	//Lets configure GPIO PIN for reset/boot
 	//disable interrupt
 	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
 	//set as output mode
 	io_conf.mode = GPIO_MODE_INPUT;
 	//bit mask of the pins that you want to set,e.g.GPIO18/19
-	io_conf.pin_bit_mask = PN532_IRQ_CONFIG;
+	io_conf.pin_bit_mask = pintBitMask;
 	//disable pull-down mode
 	io_conf.pull_down_en = 0;
 	//enable pull-up mode
 	io_conf.pull_up_en =1;
 	//configure GPIO with the given settings
 	if (gpio_config (&io_conf) != ESP_OK) return false;
-	// Reset the PN532
 
+
+	i2c_config_t conf;
+	//Open the I2C Bus
+	conf.mode = I2C_MODE_MASTER;
+	conf.sda_io_num = SDA_PIN;
+	conf.sda_pullup_en = GPIO_PULLUP_DISABLE;
+	conf.scl_io_num = SDA_PIN;
+	conf.scl_pullup_en = GPIO_PULLUP_DISABLE;
+	conf.master.clk_speed = 100000;
+
+	if(i2c_param_config (PN532_I2C_PORT, &conf)!= ESP_OK) return false;
+	if(i2c_driver_install(PN532_I2C_PORT,conf.mode,0,0,0)!= ESP_OK) return false;
+	//Needed due to long wake up procedure on the first command on i2c bus. May be decreased
+	if(i2c_set_timeout(PN532_I2C_PORT,400000)!=ESP_OK) return false;
+
+	// Reset the PN532
 	resetPN532();
 
 	return true;
 }
 
 
-bool
-init_Adafruit_PN532_SPI (uint8_t clk, uint8_t miso, uint8_t mosi, uint8_t ss) // Software SPI
-{
-	_usingSPI = false;
-	return false;
-
-}
-
-/**
- * Init the I2C PN532
- */
-bool
-init_Adafruit_PN532_I2C (uint8_t sda, uint8_t scl)
-{
-	// Hardware I2C
-	esp_err_t ret;
-	i2c_config_t conf;
-	_sda=sda;
-	_scl=scl;
-#ifdef PN532DEBUG
-
-#endif
-	conf.mode = I2C_MODE_MASTER;
-	conf.sda_io_num = SDA_PIN;
-	conf.sda_pullup_en = GPIO_PULLUP_DISABLE;
-	conf.scl_io_num = SCL_PIN;
-	conf.scl_pullup_en = GPIO_PULLUP_DISABLE;
-	conf.master.clk_speed = 100000;
-	ret = i2c_param_config (PN532_I2C_PORT, &conf);
-	if (ret != ESP_OK) return false;
-	ret = i2c_driver_install(PN532_I2C_PORT,conf.mode,0,0,0);
-	if (ret != ESP_OK) return false;
-
-	ret = i2c_set_timeout(PN532_I2C_PORT,400000);
-	if (ret != ESP_OK) return false;
-
-	return true;
-}
 
 
 /**************************************************************************/
@@ -244,22 +231,16 @@ init_Adafruit_PN532_I2C (uint8_t sda, uint8_t scl)
 
  @param  buff      Pointer to the buffer where data will be written
  @param  n         Number of bytes to be read
+ @return true if read success, false otherwise
  */
 /**************************************************************************/
 bool readdata (uint8_t* buff, uint8_t n)
 {
-
-		// I2C write.
-
-		vTaskDelay(2/portTICK_PERIOD_MS);
-
-
 		i2c_cmd_handle_t i2ccmd;
 		uint8_t *buffer=malloc(n+3);
 
 		bzero(buffer,n+3);
 		bzero(buff,n);
-
 
 		i2ccmd = i2c_cmd_link_create();
 		i2c_master_start(i2ccmd);
@@ -286,15 +267,7 @@ bool readdata (uint8_t* buff, uint8_t n)
 #endif
 		free(buffer);
 
-		//SEND ACK to stop or acknoledge
-//		sendACK();
 		return true;
-
-		// Discard trailing 0x00 0x00
-		// i2c_recv();
-
-
-//	}
 }
 
 /************** high level communication functions (handles both I2C and SPI) */
@@ -302,10 +275,10 @@ bool readdata (uint8_t* buff, uint8_t n)
 /**************************************************************************/
 /*!
  @brief  Tries to read the SPI or I2C ACK signal
+ @return true if ACK received, false otherwise
  */
 /**************************************************************************/
-bool
-readack ()
+bool readack ()
 {
 	uint8_t ackbuff[6];
 
@@ -314,21 +287,19 @@ readack ()
 	return (0 == strncmp ((char *) ackbuff, (char *) pn532ack, 6));
 }
 
-
-
-
 /**************************************************************************/
 /*!
  @brief  Return true if the PN532 is ready with a response.
+ @return true if IRQ signal LOW
  */
 /**************************************************************************/
-bool
-isready ()
+bool isready ()
 {
 	// I2C check if status is ready by IRQ line being pulled low.
 	uint8_t x = gpio_get_level (IRQ_PIN);
-
-//	ESP_LOGI(TAG,"IRQ: %d",x);
+#ifdef PN532DEBUG
+	ESP_LOGI(TAG,"IRQ: %d",x);
+#endif
 	return (x == 0);
 }
 
@@ -336,25 +307,27 @@ isready ()
 /*!
  @brief  Waits until the PN532 is ready.
 
- @param  timeout   Timeout before giving up
+ @param  timeout   Timeout before giving up in milliseconds. IF TIMEOUT 0 WILL WAIT UNDEFINITELY.
+ @return true if PN532 is ready before timeout, false otherwise
  */
 /**************************************************************************/
-bool
-waitready (uint16_t timeout)
+bool waitready (uint16_t timeout)
 {
 	uint16_t timer = 0;
 	while (!isready ())
 	{
 		if (timeout != 0)
 		{
-			timer += 1;
+			timer += 10;
 			if (timer > timeout)
 			{
-				ESP_LOGE (TAG, "TIMEOUT!");
+#ifdef PN532DEBUG
+				ESP_LOGE (TAG, "Waitready TIMEOUT after %d ms!",timeout);
+#endif
 				return false;
 			}
 		}
-		vTaskDelay (1 / portTICK_PERIOD_MS);
+		vTaskDelay (10 / portTICK_PERIOD_MS);
 	}
 	return true;
 }
@@ -367,7 +340,7 @@ waitready (uint16_t timeout)
  @param  cmdlen    The size of the command in bytes
  @param  timeout   timeout before giving up
 
- @returns  1 if everything is OK, 0 if timeout occured before an
+ @returns  true if everything is OK, 0 if timeout occured before an
  ACK was recieved
  */
 /**************************************************************************/
@@ -408,8 +381,7 @@ bool sendCommandCheckAck (uint8_t *cmd, uint8_t cmdlen, uint16_t timeout)
  @returns  The chip's firmware version and ID
  */
 /**************************************************************************/
-uint32_t
-getPN532FirmwareVersion (void)
+uint32_t getPN532FirmwareVersion (void)
 {
 	uint32_t response;
 
@@ -432,7 +404,7 @@ getPN532FirmwareVersion (void)
 		return 0;
 	}
 
-	int offset = _usingSPI ? 6 : 7; // Skip a response byte when using I2C to ignore extra data.
+	int offset =  7; // Skip a response byte when using I2C to ignore extra data.
 	response = pn532_packetbuffer[offset++];
 	response <<= 8;
 	response |= pn532_packetbuffer[offset++];
@@ -465,8 +437,7 @@ getPN532FirmwareVersion (void)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-bool
-writeGPIO (uint8_t pinstate)
+bool writeGPIO (uint8_t pinstate)
 {
 
 	// Make sure pinstate does not try to toggle P32 or P34
@@ -491,7 +462,7 @@ writeGPIO (uint8_t pinstate)
 	ESP_LOGD(TAG,"Received: 0x%.2X 0x%.2X 0x%.2X 0x%.2X 0x%.2X 0x%.2X 0x%.2X 0x%.2X",pn532_packetbuffer[0],pn532_packetbuffer[1],pn532_packetbuffer[2],pn532_packetbuffer[3],pn532_packetbuffer[4],pn532_packetbuffer[5],pn532_packetbuffer[6],pn532_packetbuffer[7]);
 #endif
 
-	int offset = _usingSPI ? 5 : 6;
+	int offset = 6;
 	return (pn532_packetbuffer[offset] == 0x0F);
 }
 
@@ -509,8 +480,7 @@ writeGPIO (uint8_t pinstate)
  pinState[5]  = P35
  */
 /**************************************************************************/
-uint8_t
-readGPIO (void)
+uint8_t readGPIO (void)
 {
 	pn532_packetbuffer[0] = PN532_COMMAND_READGPIO;
 
@@ -530,7 +500,7 @@ readGPIO (void)
 	 b8              Interface Mode Pins (not used ... bus select pins)
 	 b9..10          checksum */
 
-	int p3offset = _usingSPI ? 6 : 7;
+	int p3offset = 7;
 
 #ifdef PN532DEBUG
 	printf("Received: ");
@@ -564,8 +534,7 @@ readGPIO (void)
  @brief  Configures the SAM (Secure Access Module)
  */
 /**************************************************************************/
-bool
-SAMConfig (void)
+bool SAMConfig (void)
 {
 	pn532_packetbuffer[0] = PN532_COMMAND_SAMCONFIGURATION;
 	pn532_packetbuffer[1] = 0x01; // normal mode;
@@ -577,7 +546,7 @@ SAMConfig (void)
 	// read data packet
 	readdata (pn532_packetbuffer, 50);
 
-	int offset = _usingSPI ? 5 : 6;
+	int offset =  6;
 	return (pn532_packetbuffer[offset] == 0x15);
 }
 
@@ -591,8 +560,7 @@ SAMConfig (void)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-bool
-setPassiveActivationRetries (uint8_t maxRetries)
+bool setPassiveActivationRetries (uint8_t maxRetries)
 {
 	pn532_packetbuffer[0] = PN532_COMMAND_RFCONFIGURATION;
 	pn532_packetbuffer[1] = 5;    // Config item 5 (MaxRetries)
@@ -624,8 +592,7 @@ setPassiveActivationRetries (uint8_t maxRetries)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-bool
-readPassiveTargetID (uint8_t cardbaudrate, uint8_t * uid, uint8_t * uidLength, uint16_t timeout)
+bool readPassiveTargetID (uint8_t cardbaudrate, uint8_t * uid, uint8_t * uidLength, uint16_t timeout)
 {
 	pn532_packetbuffer[0] = PN532_COMMAND_INLISTPASSIVETARGET;
 	pn532_packetbuffer[1] = 1; // max 1 cards at once (we can set this to 2 later)
@@ -639,19 +606,16 @@ readPassiveTargetID (uint8_t cardbaudrate, uint8_t * uid, uint8_t * uidLength, u
 		return 0x0;  // no cards read
 	}
 
-	// wait for a card to enter the field (only possible with I2C)
-	if (!_usingSPI)
-	{
+
 #ifdef PN532DEBUG
 		ESP_LOGD(TAG,"Waiting for IRQ (indicates card presence)");
 #endif
-		if (!waitready (timeout))
-		{
+	if (!waitready (timeout))
+	{
 #ifdef PN532DEBUG
 			ESP_LOGD(TAG,"IRQ Timeout");
 #endif
-			return 0x0;
-		}
+		return 0x0;
 	}
 
 	// read data packet
@@ -712,8 +676,7 @@ readPassiveTargetID (uint8_t cardbaudrate, uint8_t * uid, uint8_t * uidLength, u
  @param  responseLength  Pointer to the response data length
  */
 /**************************************************************************/
-bool
-inDataExchange (uint8_t * send, uint8_t sendLength, uint8_t * response, uint8_t * responseLength)
+bool inDataExchange (uint8_t * send, uint8_t sendLength, uint8_t * response, uint8_t * responseLength)
 {
 	if (sendLength > PN532_PACKBUFFSIZ - 2)
 	{
@@ -804,8 +767,7 @@ inDataExchange (uint8_t * send, uint8_t sendLength, uint8_t * response, uint8_t 
  peer acting as card/responder.
  */
 /**************************************************************************/
-bool
-inListPassiveTarget ()
+bool inListPassiveTarget ()
 {
 	pn532_packetbuffer[0] = PN532_COMMAND_INLISTPASSIVETARGET;
 	pn532_packetbuffer[1] = 1;
@@ -884,8 +846,7 @@ inListPassiveTarget ()
  in the sector (block 0 relative to the current sector)
  */
 /**************************************************************************/
-bool
-mifareclassic_IsFirstBlock (uint32_t uiBlock)
+bool mifareclassic_IsFirstBlock (uint32_t uiBlock)
 {
 	// Test if we are in the small or big sectors
 	if (uiBlock < 128) return ((uiBlock) % 4 == 0);
@@ -897,8 +858,7 @@ mifareclassic_IsFirstBlock (uint32_t uiBlock)
  Indicates whether the specified block number is the sector trailer
  */
 /**************************************************************************/
-bool
-mifareclassic_IsTrailerBlock (uint32_t uiBlock)
+bool mifareclassic_IsTrailerBlock (uint32_t uiBlock)
 {
 	// Test if we are in the small or big sectors
 	if (uiBlock < 128) return ((uiBlock + 1) % 4 == 0);
@@ -924,10 +884,8 @@ mifareclassic_IsTrailerBlock (uint32_t uiBlock)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-uint8_t
-mifareclassic_AuthenticateBlock (uint8_t * uid, uint8_t uidLen, uint32_t blockNumber, uint8_t keyNumber, uint8_t * keyData)
+uint8_t mifareclassic_AuthenticateBlock (uint8_t * uid, uint8_t uidLen, uint32_t blockNumber, uint8_t keyNumber, uint8_t * keyData)
 {
-	uint8_t len;
 	uint8_t i;
 
 	// Hang on to the key and uid data
@@ -987,8 +945,7 @@ mifareclassic_AuthenticateBlock (uint8_t * uid, uint8_t uidLen, uint32_t blockNu
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-uint8_t
-mifareclassic_ReadDataBlock (uint8_t blockNumber, uint8_t * data)
+uint8_t mifareclassic_ReadDataBlock (uint8_t blockNumber, uint8_t * data)
 {
 #ifdef MIFAREDEBUG
 	ESP_LOGD(TAG,"Trying to read 16 bytes from block %d",blockNumber);
@@ -1047,8 +1004,7 @@ mifareclassic_ReadDataBlock (uint8_t blockNumber, uint8_t * data)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-uint8_t
-mifareclassic_WriteDataBlock (uint8_t blockNumber, uint8_t * data)
+uint8_t mifareclassic_WriteDataBlock (uint8_t blockNumber, uint8_t * data)
 {
 #ifdef MIFAREDEBUG
 	PN532DEBUGPRINT.print(F("Trying to write 16 bytes to block "));PN532DEBUGPRINT.println(blockNumber);
@@ -1084,8 +1040,7 @@ mifareclassic_WriteDataBlock (uint8_t blockNumber, uint8_t * data)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-uint8_t
-mifareclassic_FormatNDEF (void)
+uint8_t mifareclassic_FormatNDEF (void)
 {
 	uint8_t sectorbuffer1[16] =
 	{ 0x14, 0x01, 0x03, 0xE1, 0x03, 0xE1, 0x03, 0xE1, 0x03, 0xE1, 0x03, 0xE1, 0x03, 0xE1, 0x03, 0xE1 };
@@ -1125,8 +1080,7 @@ mifareclassic_FormatNDEF (void)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-uint8_t
-mifareclassic_WriteNDEFURI (uint8_t sectorNumber, uint8_t uriIdentifier, const char * url)
+uint8_t mifareclassic_WriteNDEFURI (uint8_t sectorNumber, uint8_t uriIdentifier, const char * url)
 {
 	// Figure out how long the string is
 	uint8_t len = strlen (url);
@@ -1205,8 +1159,7 @@ mifareclassic_WriteNDEFURI (uint8_t sectorNumber, uint8_t uriIdentifier, const c
  retrieved data (if any)
  */
 /**************************************************************************/
-uint8_t
-mifareultralight_ReadPage (uint8_t page, uint8_t * buffer)
+uint8_t mifareultralight_ReadPage (uint8_t page, uint8_t * buffer)
 {
 	if (page >= 64)
 	{
@@ -1283,8 +1236,7 @@ mifareultralight_ReadPage (uint8_t page, uint8_t * buffer)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-uint8_t
-mifareultralight_WritePage (uint8_t page, uint8_t * data)
+uint8_t mifareultralight_WritePage (uint8_t page, uint8_t * data)
 {
 
 	if (page >= 64)
@@ -1337,8 +1289,7 @@ mifareultralight_WritePage (uint8_t page, uint8_t * data)
  retrieved data (if any)
  */
 /**************************************************************************/
-uint8_t
-ntag2xx_ReadPage (uint8_t page, uint8_t * buffer)
+uint8_t ntag2xx_ReadPage (uint8_t page, uint8_t * buffer)
 {
 	// TAG Type       PAGES   USER START    USER STOP
 	// --------       -----   ----------    ---------
@@ -1422,8 +1373,7 @@ ntag2xx_ReadPage (uint8_t page, uint8_t * buffer)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-uint8_t
-ntag2xx_WritePage (uint8_t page, uint8_t * data)
+uint8_t ntag2xx_WritePage (uint8_t page, uint8_t * data)
 {
 	// TAG Type       PAGES   USER START    USER STOP
 	// --------       -----   ----------    ---------
@@ -1486,8 +1436,7 @@ ntag2xx_WritePage (uint8_t page, uint8_t * data)
  @returns 1 if everything executed properly, 0 for an error
  */
 /**************************************************************************/
-uint8_t
-ntag2xx_WriteNDEFURI (uint8_t uriIdentifier, char * url, uint8_t dataLen)
+uint8_t ntag2xx_WriteNDEFURI (uint8_t uriIdentifier, char * url, uint8_t dataLen)
 {
 	uint8_t pageBuffer[4] =
 	{ 0, 0, 0, 0 };
