@@ -43,6 +43,7 @@ static xQueueHandle IRQQueue = NULL;
 #define PN532DEBUG
 // #define MIFAREDEBUG
 // #define IRQDEBUG
+// #define ENABLE_IRQ_ISR
 
 #define PN532_PACKBUFFSIZ 64
 uint8_t pn532_packetbuffer[PN532_PACKBUFFSIZ];
@@ -89,6 +90,7 @@ void writecommand (uint8_t* cmd, uint8_t cmdlen)
 	uint8_t *command=malloc(cmdlen+9);
 	bzero(command,cmdlen+9);
 
+	vTaskDelay(10/portTICK_PERIOD_MS);
 	checksum = PN532_PREAMBLE + PN532_PREAMBLE + PN532_STARTCODE2;
 
 	command[0]=PN532_I2C_ADDRESS;
@@ -206,7 +208,13 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
 	pintBitMask=((1ULL) << IRQ_PIN);
 	//Lets configure GPIO PIN for IRQ
 	//disable interrupt
+#ifdef ENABLE_IRQ_ISR
+
 	io_conf.intr_type = GPIO_PIN_INTR_NEGEDGE;
+#else
+	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+#endif
+
 	//set as output mode
 	io_conf.mode = GPIO_MODE_INPUT;
 	//bit mask of the pins that you want to set,e.g.GPIO18/19
@@ -222,6 +230,7 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
 	// Reset the PN532
 	resetPN532();
 
+#ifdef ENABLE_IRQ_ISR
 	if(IRQQueue!=NULL) vQueueDelete(IRQQueue);
   //create a queue to handle gpio event from isr
 	IRQQueue = xQueueCreate(1, sizeof(uint32_t));
@@ -230,7 +239,7 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
   gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
   //hook isr handler for specific gpio pin
   gpio_isr_handler_add(IRQ_PIN, IRQHandler, (void*) IRQ_PIN);
-
+#endif;
 	i2c_config_t conf;
 	//Open the I2C Bus
 	conf.mode = I2C_MODE_MASTER;
@@ -267,6 +276,7 @@ bool readdata (uint8_t* buff, uint8_t n)
 		i2c_cmd_handle_t i2ccmd;
 		uint8_t *buffer=malloc(n+3);
 
+		vTaskDelay(10/portTICK_PERIOD_MS);
 		bzero(buffer,n+3);
 		bzero(buff,n);
 
@@ -341,6 +351,7 @@ bool isready ()
 /**************************************************************************/
 bool waitready (uint16_t timeout)
 {
+#ifdef ENABLE_IRQ_ISR
 	uint32_t io_num=0;
 	TickType_t delay=0;
 	if(timeout==0) delay=portMAX_DELAY;
@@ -348,14 +359,15 @@ bool waitready (uint16_t timeout)
 
 	xQueueReceive(IRQQueue, &io_num, delay);
 
+
 	return (io_num==IRQ_PIN);
-	/*
+#else
 	uint16_t timer = 0;
 	while (!isready ())
 	{
 		if (timeout != 0)
 		{
-			timer += 1;
+			timer += 10;
 			if (timer > timeout)
 			{
 #ifdef PN532DEBUG
@@ -364,9 +376,10 @@ bool waitready (uint16_t timeout)
 				return false;
 			}
 		}
-		vTaskDelay (1 / portTICK_PERIOD_MS);
+		vTaskDelay (10 / portTICK_PERIOD_MS);
 	}
-	return true;*/
+	return true;
+#endif
 }
 
 /**************************************************************************/
