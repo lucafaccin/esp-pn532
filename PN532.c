@@ -17,6 +17,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -35,6 +36,9 @@ uint8_t _key[6];       // Mifare Classic key
 uint8_t _inListedTag;  // Tg number of inlisted tag.
 
 
+//IRQ Event handler
+#define ESP_INTR_FLAG_DEFAULT 0
+static xQueueHandle IRQQueue = NULL;
 // Uncomment these lines to enable debug output for PN532(SPI) and/or MIFARE related code
 #define PN532DEBUG
 // #define MIFAREDEBUG
@@ -146,7 +150,19 @@ void writecommand (uint8_t* cmd, uint8_t cmdlen)
 	free(command);
 }
 
+/**************************************************************************/
+/*!
+ @brief  Receive the interrupt generated from the IRQ PIN
 
+ @param  ARG      						arguments for interrupt
+
+ */
+/**************************************************************************/
+static void IRAM_ATTR IRQHandler(void* arg)
+{
+    uint32_t gpio_num = (uint32_t) arg;
+    xQueueSendFromISR(IRQQueue, &gpio_num, NULL);
+}
 /**************************************************************************/
 /*!
  @brief  Setups the HW and the I2C Bus
@@ -171,7 +187,7 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
 	uint64_t pintBitMask=((1ULL) << RESET_PIN);
 
 	//initialize the PIN
-	//Lets configure GPIO PIN for IRQ
+	//Lets configure GPIO PIN for Reset
 	gpio_config_t io_conf;
 	//disable interrupt
 	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
@@ -188,9 +204,9 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
 
 
 	pintBitMask=((1ULL) << IRQ_PIN);
-	//Lets configure GPIO PIN for reset/boot
+	//Lets configure GPIO PIN for IRQ
 	//disable interrupt
-	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
+	io_conf.intr_type = GPIO_PIN_INTR_NEGEDGE;
 	//set as output mode
 	io_conf.mode = GPIO_MODE_INPUT;
 	//bit mask of the pins that you want to set,e.g.GPIO18/19
@@ -202,8 +218,18 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
 	//configure GPIO with the given settings
 	if (gpio_config (&io_conf) != ESP_OK) return false;
 
+
 	// Reset the PN532
 	resetPN532();
+
+	if(IRQQueue!=NULL) vQueueDelete(IRQQueue);
+  //create a queue to handle gpio event from isr
+	IRQQueue = xQueueCreate(1, sizeof(uint32_t));
+
+	//Start the IRQ Service
+  gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+  //hook isr handler for specific gpio pin
+  gpio_isr_handler_add(IRQ_PIN, IRQHandler, (void*) IRQ_PIN);
 
 	i2c_config_t conf;
 	//Open the I2C Bus
@@ -315,6 +341,15 @@ bool isready ()
 /**************************************************************************/
 bool waitready (uint16_t timeout)
 {
+	uint32_t io_num=0;
+	TickType_t delay=0;
+	if(timeout==0) delay=portMAX_DELAY;
+	else delay=timeout/portTICK_PERIOD_MS;
+
+	xQueueReceive(IRQQueue, &io_num, delay);
+
+	return (io_num==IRQ_PIN);
+	/*
 	uint16_t timer = 0;
 	while (!isready ())
 	{
@@ -331,7 +366,7 @@ bool waitready (uint16_t timeout)
 		}
 		vTaskDelay (1 / portTICK_PERIOD_MS);
 	}
-	return true;
+	return true;*/
 }
 
 /**************************************************************************/
@@ -1517,3 +1552,4 @@ uint8_t ntag2xx_WriteNDEFURI (uint8_t uriIdentifier, char * url, uint8_t dataLen
 	// Seems that everything was OK (?!)
 	return 1;
 }
+
