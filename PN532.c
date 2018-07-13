@@ -43,7 +43,7 @@ static xQueueHandle IRQQueue = NULL;
 #define PN532DEBUG
 // #define MIFAREDEBUG
 // #define IRQDEBUG
-// #define ENABLE_IRQ_ISR
+#define ENABLE_IRQ_ISR
 
 #define PN532_PACKBUFFSIZ 64
 uint8_t pn532_packetbuffer[PN532_PACKBUFFSIZ];
@@ -210,7 +210,7 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
 	//disable interrupt
 #ifdef ENABLE_IRQ_ISR
 
-	io_conf.intr_type = GPIO_PIN_INTR_NEGEDGE;
+	io_conf.intr_type = GPIO_PIN_INTR_NEGEDGE ;
 #else
 	io_conf.intr_type = GPIO_PIN_INTR_DISABLE;
 #endif
@@ -239,7 +239,7 @@ bool init_PN532_I2C(uint8_t sda, uint8_t scl,uint8_t reset,uint8_t irq,i2c_port_
   gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
   //hook isr handler for specific gpio pin
   gpio_isr_handler_add(IRQ_PIN, IRQHandler, (void*) IRQ_PIN);
-#endif;
+#endif
 	i2c_config_t conf;
 	//Open the I2C Bus
 	conf.mode = I2C_MODE_MASTER;
@@ -352,6 +352,9 @@ bool isready ()
 bool waitready (uint16_t timeout)
 {
 #ifdef ENABLE_IRQ_ISR
+	//Clean the ques
+	xQueueReset(IRQQueue);
+
 	uint32_t io_num=0;
 	TickType_t delay=0;
 	if(timeout==0) delay=portMAX_DELAY;
