@@ -1,0 +1,14 @@
+menu "PN532 Options"
+	config ENABLE_IRQ_ISR
+		bool "Use IRQ pin instead of polling"
+		default true
+	config PN532DEBUG
+		bool "Enable PN532 general debug messages"
+		default false
+	config MIFAREDEBUG
+		bool "Enable Mifare debug messages"
+		default false
+	config IRQDEBUG
+		bool "Enable IRQ Pin related debug messages"
+		default false
+endmenu
