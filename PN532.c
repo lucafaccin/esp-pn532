@@ -164,7 +164,7 @@ void writecommand (uint8_t *cmd, uint8_t cmdlen)
 /**************************************************************************/
 static void IRAM_ATTR IRQHandler (void *arg)
 {
-  uint32_t gpio_num = *((uint32_t *)arg);
+  uint32_t gpio_num =(uint32_t)arg;
   xQueueSendFromISR(IRQQueue, &gpio_num, NULL);
 }
 /**************************************************************************/
@@ -238,7 +238,7 @@ bool init_PN532_I2C (uint8_t sda, uint8_t scl, uint8_t reset, uint8_t irq, i2c_p
   //Start the IRQ Service
   gpio_install_isr_service (ESP_INTR_FLAG_DEFAULT);
   //hook isr handler for specific gpio pin
-  gpio_isr_handler_add (IRQ_PIN, IRQHandler, (void* )&IRQ_PIN);
+  gpio_isr_handler_add (IRQ_PIN, IRQHandler, (void* )IRQ_PIN);
 #endif
   i2c_config_t conf;
   //Open the I2C Bus
